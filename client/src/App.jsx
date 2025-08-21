@@ -8,6 +8,7 @@ function App() {
       <Button className="mt-4" variant="outline">
         Learn More
       </Button>
+      <p>This is the demo.</p>
     </div>
   )
 }
