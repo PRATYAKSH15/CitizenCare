@@ -8,6 +8,9 @@ function App() {
       <Button className="mt-4" variant="outline">
         Learn More
       </Button>
+      <Button>Kill Me</Button>
+
+      
     </div>
   )
 }
