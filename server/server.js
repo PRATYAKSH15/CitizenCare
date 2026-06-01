@@ -1,4 +1,6 @@
 import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { connectDB } from './config/db.js';
@@ -7,6 +9,7 @@ import issueRoutes from './routes/issues.js';
 dotenv.config();
 
 const app = express();
+const httpServer = createServer(app);
 const PORT = process.env.PORT || 3000;
 
 const corsOptions = {
@@ -19,15 +22,23 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 
+// Socket.io
+export const io = new Server(httpServer, {
+  cors: { origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true },
+});
+
+io.on('connection', (socket) => {
+  socket.join('admins');
+});
+
 connectDB();
 
 app.use('/api/issues', issueRoutes);
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-// Global error handler — ensures CORS headers are always present on errors
 app.use((err, req, res, next) => {
   console.error('Server error:', err.message);
   res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+httpServer.listen(PORT, () => console.log(`Server running on port ${PORT}`));

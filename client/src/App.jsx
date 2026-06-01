@@ -6,6 +6,7 @@ import LandingPage from './pages/LandingPage'
 import CitizenPortal from './pages/CitizenPortal'
 import AdminDashboard from './pages/AdminDashboard'
 import MyIssues from './pages/MyIssues'
+import Analytics from './pages/Analytics'
 
 function ProtectedRoute({ children }) {
   const { isSignedIn, isLoaded } = useAuth()
@@ -38,6 +39,7 @@ function App() {
           <Route path="/submit" element={<ProtectedRoute><CitizenPortal /></ProtectedRoute>} />
           <Route path="/my-issues" element={<ProtectedRoute><MyIssues /></ProtectedRoute>} />
           <Route path="/dashboard" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
+          <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
         </Routes>
       </div>
     </BrowserRouter>

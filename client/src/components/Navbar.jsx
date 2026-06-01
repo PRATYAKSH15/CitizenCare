@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
 import { SignedIn, SignedOut, UserButton, useUser } from '@clerk/clerk-react'
 import { Button } from '@/components/ui/button'
-import { Building2, LayoutDashboard, FileText, PlusCircle } from 'lucide-react'
+import { Building2, LayoutDashboard, FileText, PlusCircle, BarChart2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 function NavLink({ to, children, icon: Icon }) {
@@ -41,6 +41,7 @@ export default function Navbar() {
             <NavLink to="/submit" icon={PlusCircle}>Report Issue</NavLink>
             <NavLink to="/my-issues" icon={FileText}>My Issues</NavLink>
             {isAdmin && <NavLink to="/dashboard" icon={LayoutDashboard}>Dashboard</NavLink>}
+            {isAdmin && <NavLink to="/analytics" icon={BarChart2}>Analytics</NavLink>}
           </SignedIn>
         </nav>
 

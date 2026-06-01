@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useAuth, useUser } from '@clerk/clerk-react'
 import api from '@/lib/api'
+import socket from '@/lib/socket'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogFooter } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
+import { ToastContainer } from '@/components/ui/toast'
 import { Loader2, Brain, MapPin, Clock, ShieldX, Search, Filter } from 'lucide-react'
 
 const statusVariant = { pending: 'warning', 'in-progress': 'info', resolved: 'success' }
@@ -73,9 +75,20 @@ export default function AdminDashboard() {
   const [selected, setSelected] = useState(null)
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
+  const [toasts, setToasts] = useState([])
+  const toastIdRef = useRef(0)
 
   const [filters, setFilters] = useState({ status: '', priority: '', category: '', sentiment: '' })
   const [editForm, setEditForm] = useState({ status: '', priority: '', department: '', adminNote: '' })
+
+  const addToast = useCallback((message, type = 'info') => {
+    const id = ++toastIdRef.current
+    setToasts((prev) => [...prev, { id, message, type }])
+  }, [])
+
+  const removeToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id))
+  }, [])
 
   const fetchData = useCallback(async () => {
     try {
@@ -105,6 +118,30 @@ export default function AdminDashboard() {
     if (isAdmin) fetchData()
     else if (isLoaded) setLoading(false)
   }, [isAdmin, isLoaded, fetchData])
+
+  useEffect(() => {
+    if (!isAdmin) return
+
+    socket.connect()
+
+    socket.on('new_issue', (issue) => {
+      setIssues((prev) => [issue, ...prev])
+      setStats((prev) => prev ? { ...prev, total: prev.total + 1, pending: prev.pending + 1 } : prev)
+      addToast(`New issue: ${issue.title}`, 'info')
+    })
+
+    socket.on('issue_updated', (updated) => {
+      setIssues((prev) => prev.map((i) => i._id === updated._id ? updated : i))
+      setSelected((prev) => prev?._id === updated._id ? updated : prev)
+      addToast(`Issue updated: ${updated.title}`, 'success')
+    })
+
+    return () => {
+      socket.off('new_issue')
+      socket.off('issue_updated')
+      socket.disconnect()
+    }
+  }, [isAdmin, addToast])
 
   const openDetail = (issue) => {
     setSelected(issue)
@@ -171,6 +208,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10">
+      <ToastContainer toasts={toasts} onClose={removeToast} />
       <div className="mb-8">
         <h1 className="text-2xl font-bold mb-1">Admin Dashboard</h1>
         <p className="text-sm text-muted-foreground">Manage and respond to citizen issues</p>

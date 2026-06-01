@@ -2,6 +2,8 @@ import express from 'express';
 import { ClerkExpressRequireAuth, clerkClient } from '@clerk/clerk-sdk-node';
 import Issue from '../models/Issue.js';
 import { analyzeIssue } from '../controllers/aiController.js';
+import { sendStatusUpdateEmail } from '../controllers/emailController.js';
+import { io } from '../server.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -49,6 +51,7 @@ router.post('/', requireAuth, async (req, res) => {
       ...aiData,
     });
 
+    io.to('admins').emit('new_issue', issue);
     res.status(201).json(issue);
   } catch (err) {
     console.error(err);
@@ -78,6 +81,36 @@ router.get('/stats', requireAuth, requireAdmin, async (req, res) => {
     res.json({ total, pending, inProgress, resolved });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
+// GET /api/issues/analytics — full analytics data (admin)
+router.get('/analytics', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const [byCategory, bySentiment, byStatus, recentIssues] = await Promise.all([
+      Issue.aggregate([{ $group: { _id: '$category', count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
+      Issue.aggregate([{ $group: { _id: '$sentiment', count: { $sum: 1 } } }]),
+      Issue.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+      Issue.aggregate([
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+        { $limit: 30 },
+      ]),
+    ]);
+
+    res.json({
+      byCategory: byCategory.map(i => ({ name: i._id || 'Other', count: i.count })),
+      bySentiment: bySentiment.map(i => ({ name: i._id || 'neutral', count: i.count })),
+      byStatus: byStatus.map(i => ({ name: i._id || 'pending', count: i.count })),
+      byDate: recentIssues.map(i => ({ date: i._id, count: i.count })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch analytics' });
   }
 });
 
@@ -121,6 +154,19 @@ router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
 
     const issue = await Issue.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+    io.to('admins').emit('issue_updated', issue);
+
+    if (status && status !== issue.status) {
+      sendStatusUpdateEmail({
+        to: issue.submitterEmail,
+        name: issue.submitterName,
+        issueTitle: issue.title,
+        status,
+        adminNote,
+      });
+    }
+
     res.json(issue);
   } catch (err) {
     res.status(500).json({ error: 'Failed to update issue' });
