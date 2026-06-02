@@ -19,19 +19,41 @@ Citizens report problems. AI analyses them. Admins resolve them. Everyone stays 
 - **Real-time Notifications** — Bell icon with live Socket.io push when your issue status changes
 - **Profile Stats** — Personal dashboard showing resolution rate, category breakdown, and recent activity
 
-### For Admins
+### For Main Admins
 
-- **Issue Dashboard** — View, filter, sort, and search all citizen issues
+- **Issue Dashboard** — View, filter, sort, and search all citizen issues across every department
 - **Status Management** — Update issue status with notes; triggers email + socket notification to the submitter
+- **Department Assignment** — Route issues to specific departments and assign dept admins via the Users page
 - **Bulk Actions** — Select multiple issues to change status or delete in one action
 - **Overdue Tracking** — Issues pending for 7+ days are flagged automatically
-- **Department Assignment** — Route issues to specific departments
 - **Analytics** — Charts for issue trends, category breakdown, resolution rates, and sentiment distribution
 - **Export CSV** — Download all filtered issues as a CSV file
+- **User Management** — Promote any registered citizen to a department admin and assign their department
+
+### For Department Admins
+
+- **Department Dashboard** — Scoped view showing only issues assigned to their department
+- **Status Updates** — Mark issues as in-progress or resolved and leave notes for citizens
+- **Real-time Sync** — Socket.io updates when issues in their department are modified
 
 ### Public
 
 - **Issue Map** — India choropleth map showing issue density by state with hover tooltips and drill-down
+- **Community Feed** — Browse and upvote issues without signing in
+
+---
+
+## Role System
+
+CitizenCare has three roles:
+
+| Role | How it's set | What they can do |
+| --- | --- | --- |
+| **Citizen** | Default for all sign-ups | Submit issues, vote, rate, view profile |
+| **Dept Admin** | Main admin assigns via Users page (stored in MongoDB) | Update status/notes for their department's issues only |
+| **Main Admin** | Email listed in `ADMIN_EMAILS` env var | Full access — all issues, analytics, user management |
+
+When a dept admin signs in, the frontend calls `POST /api/auth/sync` which returns their role and department from the database. The navbar and dashboard adjust automatically.
 
 ---
 
@@ -41,7 +63,7 @@ Citizens report problems. AI analyses them. Admins resolve them. Everyone stays 
 | --- | --- |
 | Frontend | React 19, Vite, Tailwind CSS v4, Shadcn/UI |
 | Routing | React Router v6 |
-| Auth | Clerk (JWT, email-based admin role) |
+| Auth | Clerk (JWT, email-based main admin + DB-stored dept admin) |
 | Real-time | Socket.io |
 | Map | react-simple-maps (SVG choropleth) |
 | Backend | Node.js, Express 4 |
@@ -57,30 +79,35 @@ Citizens report problems. AI analyses them. Admins resolve them. Everyone stays 
 CitizenCare/
 ├── client/               # React frontend (Vite)
 │   ├── public/
-│   │   └── india-states.json   # India GeoJSON (ST_NM property)
+│   │   └── india-states.json       # India GeoJSON (ST_NM property)
 │   └── src/
 │       ├── pages/
 │       │   ├── LandingPage.jsx
-│       │   ├── CitizenPortal.jsx   # Issue submission + similar issue warning
-│       │   ├── MyIssues.jsx        # Citizen's issues + rating
-│       │   ├── Feed.jsx            # Public community feed + upvoting
-│       │   ├── IssueMap.jsx        # India choropleth map
-│       │   ├── Profile.jsx         # Citizen stats profile
-│       │   ├── AdminDashboard.jsx  # Admin issue management
-│       │   └── Analytics.jsx       # Admin analytics charts
+│       │   ├── CitizenPortal.jsx       # Issue submission + similar issue warning
+│       │   ├── MyIssues.jsx            # Citizen's issues + rating
+│       │   ├── Feed.jsx                # Public community feed + upvoting
+│       │   ├── IssueMap.jsx            # India choropleth map
+│       │   ├── Profile.jsx             # Citizen stats profile
+│       │   ├── AdminDashboard.jsx      # Main admin — all issues
+│       │   ├── Analytics.jsx           # Main admin — analytics charts
+│       │   ├── DeptDashboard.jsx       # Dept admin — scoped issue view
+│       │   └── UserManagement.jsx      # Main admin — assign dept admin roles
 │       ├── components/
 │       │   ├── Navbar.jsx              # Role-aware nav + notification bell
 │       │   ├── StatusTimeline.jsx      # Issue status history timeline
 │       │   └── SocketNotifications.jsx # Background socket listener
 │       ├── contexts/
-│       │   └── NotificationContext.jsx # Notification state + localStorage
+│       │   ├── NotificationContext.jsx # Notification state + localStorage
+│       │   └── RoleContext.jsx         # Role + department from /auth/sync
 │       └── lib/
-│           └── api.js              # Axios instance
+│           └── api.js                  # Axios instance
 └── server/               # Express backend
     ├── models/
-    │   └── Issue.js        # Mongoose schema
+    │   ├── Issue.js        # Issue Mongoose schema
+    │   └── User.js         # User Mongoose schema (role + department)
     ├── routes/
-    │   └── issues.js       # All issue endpoints
+    │   ├── issues.js       # All issue endpoints
+    │   └── auth.js         # User sync + user management endpoints
     └── server.js           # Express + Socket.io setup
 ```
 
@@ -136,6 +163,8 @@ VITE_ADMIN_EMAILS=admin@example.com,other@example.com
 VITE_API_URL=http://localhost:5000/api
 ```
 
+> `ADMIN_EMAILS` and `VITE_ADMIN_EMAILS` must contain the same comma-separated list.
+
 ### 4. Run the app
 
 In two terminals:
@@ -160,7 +189,7 @@ Open [http://localhost:5173](http://localhost:5173).
 | --- | --- |
 | `MONGO_URI` | MongoDB Atlas connection string |
 | `GROQ_API_KEY` | Groq API key for LLM analysis |
-| `ADMIN_EMAILS` | Comma-separated admin email addresses |
+| `ADMIN_EMAILS` | Comma-separated main admin email addresses |
 | `EMAIL_USER` | Gmail address for outgoing notifications |
 | `EMAIL_PASS` | Gmail App Password |
 | `PORT` | Server port (default: 5000) |
@@ -175,13 +204,9 @@ Open [http://localhost:5173](http://localhost:5173).
 
 ---
 
-## Admin Role
-
-Admin access is granted to any signed-in user whose email matches `ADMIN_EMAILS` (both env vars must be kept in sync). Admins see the Dashboard and Analytics in the navbar; all citizen-facing routes are hidden for them.
-
----
-
 ## API Endpoints
+
+### Issues
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
@@ -190,14 +215,22 @@ Admin access is granted to any signed-in user whose email matches `ADMIN_EMAILS`
 | `GET` | `/api/issues/feed` | Public | Community feed (sorted by votes) |
 | `GET` | `/api/issues/search` | Public | Search issues by title (min 4 chars) |
 | `GET` | `/api/issues/public` | Public | All issues with state (for map) |
-| `GET` | `/api/issues` | Admin | All issues with filters |
-| `PATCH` | `/api/issues/:id` | Admin | Update status / notes / department |
-| `DELETE` | `/api/issues/:id` | Admin | Delete a single issue |
+| `GET` | `/api/issues` | Admin / Dept Admin | All issues (dept admins get department-scoped results) |
+| `PATCH` | `/api/issues/:id` | Admin / Dept Admin | Update issue (dept admins: status + note only, own dept) |
+| `DELETE` | `/api/issues/:id` | Admin or owner | Delete a single issue |
 | `PATCH` | `/api/issues/bulk` | Admin | Bulk status update |
 | `DELETE` | `/api/issues/bulk` | Admin | Bulk delete |
 | `POST` | `/api/issues/:id/vote` | Public | Upvote an issue |
 | `POST` | `/api/issues/:id/rate` | Citizen (owner) | Rate a resolved issue |
 | `GET` | `/api/issues/analytics` | Admin | Aggregated analytics data |
+
+### Auth & Users
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| `POST` | `/api/auth/sync` | Signed in | Upsert user doc, returns role + department |
+| `GET` | `/api/auth/users` | Admin | List all registered users |
+| `PATCH` | `/api/auth/users/:id` | Admin | Assign or remove dept admin role + department |
 
 ---
 

@@ -10,6 +10,8 @@ import Analytics from './pages/Analytics'
 import IssueMap from './pages/IssueMap'
 import Feed from './pages/Feed'
 import Profile from './pages/Profile'
+import DeptDashboard from './pages/DeptDashboard'
+import UserManagement from './pages/UserManagement'
 import { SocketNotifications } from './components/SocketNotifications'
 
 function ProtectedRoute({ children }) {
@@ -48,6 +50,8 @@ function App() {
           <Route path="/map" element={<IssueMap />} />
           <Route path="/feed" element={<Feed />} />
           <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+          <Route path="/dept-dashboard" element={<ProtectedRoute><DeptDashboard /></ProtectedRoute>} />
+          <Route path="/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
         </Routes>
       </div>
     </BrowserRouter>

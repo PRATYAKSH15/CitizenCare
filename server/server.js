@@ -5,6 +5,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { connectDB } from './config/db.js';
 import issueRoutes from './routes/issues.js';
+import authRoutes from './routes/auth.js';
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ io.on('connection', (socket) => {
 connectDB();
 
 app.use('/api/issues', issueRoutes);
+app.use('/api/auth', authRoutes);
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use((err, req, res, next) => {

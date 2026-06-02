@@ -1,6 +1,7 @@
 import express from 'express';
 import { ClerkExpressRequireAuth, clerkClient } from '@clerk/clerk-sdk-node';
 import Issue from '../models/Issue.js';
+import User from '../models/User.js';
 import { analyzeIssue } from '../controllers/aiController.js';
 import { sendStatusUpdateEmail } from '../controllers/emailController.js';
 import { io } from '../server.js';
@@ -23,6 +24,29 @@ const requireAdmin = async (req, res, next) => {
       return res.status(403).json({ error: 'Admin access required' });
     }
     next();
+  } catch (err) {
+    res.status(401).json({ error: 'Authentication failed' });
+  }
+};
+
+const requireAdminOrDeptAdmin = async (req, res, next) => {
+  try {
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    const userId = req.auth?.userId;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    const clerkUser = await clerkClient.users.getUser(userId);
+    const email = (clerkUser.emailAddresses.find(e => e.id === clerkUser.primaryEmailAddressId)?.emailAddress || '').toLowerCase();
+    if (adminEmails.includes(email)) {
+      req.isMainAdmin = true;
+      return next();
+    }
+    const dbUser = await User.findOne({ clerkId: userId });
+    if (dbUser?.role === 'dept_admin' && dbUser.department) {
+      req.isDeptAdmin = true;
+      req.deptAdminDept = dbUser.department;
+      return next();
+    }
+    return res.status(403).json({ error: 'Admin or department admin access required' });
   } catch (err) {
     res.status(401).json({ error: 'Authentication failed' });
   }
@@ -127,11 +151,12 @@ router.get('/public', async (req, res) => {
   }
 });
 
-// GET /api/issues — all issues with optional filters (admin)
-router.get('/', requireAuth, requireAdmin, async (req, res) => {
+// GET /api/issues — all issues with optional filters (admin or dept_admin)
+router.get('/', requireAuth, requireAdminOrDeptAdmin, async (req, res) => {
   try {
     const { status, priority, category, sentiment } = req.query;
     const filter = {};
+    if (req.isDeptAdmin) filter.department = req.deptAdminDept;
     if (status) filter.status = status;
     if (priority) filter.priority = priority;
     if (category) filter.category = category;
@@ -212,13 +237,22 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
-// PATCH /api/issues/:id — update status/priority/department/note (admin)
-router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
+// PATCH /api/issues/:id — update status/priority/department/note (admin or dept_admin)
+router.patch('/:id', requireAuth, requireAdminOrDeptAdmin, async (req, res) => {
   try {
     const { status, priority, department, adminNote } = req.body;
 
     const existing = await Issue.findById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Issue not found' });
+
+    if (req.isDeptAdmin) {
+      if (existing.department !== req.deptAdminDept) {
+        return res.status(403).json({ error: 'This issue is not assigned to your department' });
+      }
+      if (priority !== undefined || department !== undefined) {
+        return res.status(403).json({ error: 'Department admins can only update status and notes' });
+      }
+    }
 
     const statusChanged = status !== undefined && status !== existing.status;
 

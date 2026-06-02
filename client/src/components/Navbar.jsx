@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { SignedIn, SignedOut, UserButton, useUser } from '@clerk/clerk-react'
+import { SignedIn, SignedOut, UserButton } from '@clerk/clerk-react'
 import { Button } from '@/components/ui/button'
 import { useNotifications } from '@/contexts/NotificationContext'
-import { Building2, LayoutDashboard, FileText, PlusCircle, BarChart2, Map, Globe2, Bell, User } from 'lucide-react'
+import { useRole } from '@/contexts/RoleContext'
+import { Building2, LayoutDashboard, FileText, PlusCircle, BarChart2, Map, Globe2, Bell, User, Users, Shield } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 function NavLink({ to, children, icon: Icon }) {
@@ -82,9 +83,7 @@ function NotificationBell() {
 }
 
 export default function Navbar() {
-  const { user } = useUser()
-  const adminEmails = (import.meta.env.VITE_ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase())
-  const isAdmin = adminEmails.includes(user?.primaryEmailAddress?.emailAddress?.toLowerCase())
+  const { role } = useRole()
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -98,12 +97,17 @@ export default function Navbar() {
           <NavLink to="/map" icon={Map}>Issue Map</NavLink>
           <NavLink to="/feed" icon={Globe2}>Community</NavLink>
           <SignedIn>
-            {isAdmin ? (
+            {role === 'admin' && (
               <>
                 <NavLink to="/dashboard" icon={LayoutDashboard}>Dashboard</NavLink>
                 <NavLink to="/analytics" icon={BarChart2}>Analytics</NavLink>
+                <NavLink to="/users" icon={Users}>Users</NavLink>
               </>
-            ) : (
+            )}
+            {role === 'dept_admin' && (
+              <NavLink to="/dept-dashboard" icon={Shield}>My Department</NavLink>
+            )}
+            {role === 'citizen' && (
               <>
                 <NavLink to="/submit" icon={PlusCircle}>Report Issue</NavLink>
                 <NavLink to="/my-issues" icon={FileText}>My Issues</NavLink>
@@ -115,7 +119,7 @@ export default function Navbar() {
 
         <div className="ml-auto flex items-center gap-2">
           <SignedIn>
-            {!isAdmin && <NotificationBell />}
+            {role === 'citizen' && <NotificationBell />}
           </SignedIn>
           <SignedOut>
             <Button variant="ghost" size="sm" asChild>
