@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useAuth } from '@clerk/clerk-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -8,26 +8,54 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { Upload, X, CheckCircle2, Loader2, Brain, MapPin } from 'lucide-react'
+import { Select } from '@/components/ui/select'
+import { Upload, X, CheckCircle2, Loader2, Brain, MapPin, AlertTriangle, ThumbsUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 const sentimentColors = { positive: 'success', negative: 'destructive', neutral: 'secondary' }
 const priorityColors = { high: 'destructive', medium: 'warning', low: 'info' }
 
+const INDIAN_STATES = [
+  'Andaman & Nicobar', 'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar',
+  'Chandigarh', 'Chhattisgarh', 'Dadra and Nagar Haveli and Daman and Diu', 'Delhi',
+  'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jammu & Kashmir', 'Jharkhand',
+  'Karnataka', 'Kerala', 'Ladakh', 'Lakshadweep', 'Madhya Pradesh', 'Maharashtra',
+  'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Puducherry', 'Punjab',
+  'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura', 'Uttar Pradesh',
+  'Uttarakhand', 'West Bengal',
+]
+
 export default function CitizenPortal() {
   const { getToken } = useAuth()
   const fileRef = useRef(null)
+  const searchTimer = useRef(null)
 
-  const [form, setForm] = useState({ title: '', description: '', location: '' })
+  const [form, setForm] = useState({ title: '', description: '', location: '', state: '' })
   const [imagePreview, setImagePreview] = useState(null)
   const [imageBase64, setImageBase64] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [submitted, setSubmitted] = useState(null)
+  const [similarIssues, setSimilarIssues] = useState([])
 
-  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
+  const searchSimilar = useCallback((query) => {
+    clearTimeout(searchTimer.current)
+    if (query.trim().length < 4) { setSimilarIssues([]); return }
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const { data } = await api.get(`/issues/search?q=${encodeURIComponent(query.trim())}`)
+        setSimilarIssues(data)
+      } catch { setSimilarIssues([]) }
+    }, 600)
+  }, [])
 
-  const handleImage = (e) => {
+  const handleChange = (e) => {
+    const updated = { ...form, [e.target.name]: e.target.value }
+    setForm(updated)
+    if (e.target.name === 'title') searchSimilar(e.target.value)
+  }
+
+const handleImage = (e) => {
     const file = e.target.files[0]
     if (!file) return
     if (file.size > 5 * 1024 * 1024) {
@@ -52,7 +80,7 @@ export default function CitizenPortal() {
     setLoading(true)
     try {
       const token = await getToken()
-      const { data } = await api.post('/issues', { ...form, imageBase64 }, {
+      const { data } = await api.post('/issues', { ...form, imageBase64, state: form.state || undefined }, {
         headers: { Authorization: `Bearer ${token}` },
       })
       setSubmitted(data)
@@ -92,7 +120,7 @@ export default function CitizenPortal() {
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Button onClick={() => { setSubmitted(null); setForm({ title: '', description: '', location: '' }); setImagePreview(null); setImageBase64(null) }}>
+              <Button onClick={() => { setSubmitted(null); setForm({ title: '', description: '', location: '', state: '' }); setImagePreview(null); setImageBase64(null); setSimilarIssues([]) }}>
                 Submit Another
               </Button>
               <Button variant="outline" asChild>
@@ -131,6 +159,34 @@ export default function CitizenPortal() {
                 onChange={handleChange}
                 required
               />
+              {similarIssues.length > 0 && (
+                <div className="rounded-lg border border-yellow-200 bg-yellow-50/60 dark:border-yellow-900 dark:bg-yellow-950/30 p-3 space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-yellow-700 dark:text-yellow-400">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    Similar issues already reported — consider upvoting instead
+                  </div>
+                  <div className="space-y-1.5">
+                    {similarIssues.map(issue => (
+                      <div key={issue._id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="truncate text-foreground/80">{issue.title}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {issue.votes > 0 && (
+                            <span className="flex items-center gap-0.5 text-muted-foreground">
+                              <ThumbsUp className="h-2.5 w-2.5" />{issue.votes}
+                            </span>
+                          )}
+                          <Badge variant={issue.status === 'resolved' ? 'success' : issue.status === 'in-progress' ? 'info' : 'warning'} className="capitalize text-[10px] py-0">
+                            {issue.status}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <Link to="/feed" className="text-xs text-primary hover:underline inline-flex items-center gap-0.5">
+                    View in Community →
+                  </Link>
+                </div>
+              )}
             </div>
 
             <div className="space-y-1.5">
@@ -146,19 +202,32 @@ export default function CitizenPortal() {
               />
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="location">
-                <span className="flex items-center gap-1.5">
-                  <MapPin className="h-3.5 w-3.5" /> Location
-                </span>
-              </Label>
-              <Input
-                id="location"
-                name="location"
-                placeholder="e.g., 12 Baker Street, near the park"
-                value={form.location}
-                onChange={handleChange}
-              />
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="location">
+                  <span className="flex items-center gap-1.5">
+                    <MapPin className="h-3.5 w-3.5" /> Location
+                  </span>
+                </Label>
+                <Input
+                  id="location"
+                  name="location"
+                  placeholder="e.g., 12 Baker Street, near the park"
+                  value={form.location}
+                  onChange={handleChange}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="state">State / UT</Label>
+                <Select
+                  id="state"
+                  value={form.state}
+                  onChange={(e) => setForm({ ...form, state: e.target.value })}
+                >
+                  <option value="">Select state…</option>
+                  {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                </Select>
+              </div>
             </div>
 
             <Separator />

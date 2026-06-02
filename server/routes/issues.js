@@ -31,7 +31,7 @@ const requireAdmin = async (req, res, next) => {
 // POST /api/issues — submit a new issue (citizen)
 router.post('/', requireAuth, async (req, res) => {
   try {
-    const { title, description, location, imageBase64 } = req.body;
+    const { title, description, location, imageBase64, state } = req.body;
     const userId = req.auth.userId;
 
     const clerkUser = await clerkClient.users.getUser(userId);
@@ -45,6 +45,7 @@ router.post('/', requireAuth, async (req, res) => {
       description,
       location,
       imageBase64,
+      state,
       submittedBy: userId,
       submitterName,
       submitterEmail,
@@ -114,6 +115,18 @@ router.get('/analytics', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// GET /api/issues/public — public map data (no auth required)
+router.get('/public', async (req, res) => {
+  try {
+    const issues = await Issue.find()
+      .select('title category status priority sentiment location state votes createdAt')
+      .sort({ createdAt: -1 });
+    res.json(issues);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch issues' });
+  }
+});
+
 // GET /api/issues — all issues with optional filters (admin)
 router.get('/', requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -128,6 +141,63 @@ router.get('/', requireAuth, requireAdmin, async (req, res) => {
     res.json(issues);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch issues' });
+  }
+});
+
+// GET /api/issues/feed — public community feed (no auth)
+router.get('/feed', async (req, res) => {
+  try {
+    const issues = await Issue.find()
+      .select('title description aiSummary category status priority sentiment state location votes submitterName createdAt statusHistory adminNote department')
+      .sort({ votes: -1, createdAt: -1 })
+      .limit(200);
+    res.json(issues);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch feed' });
+  }
+});
+
+// GET /api/issues/search — similar issue detection (no auth)
+router.get('/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim().length < 4) return res.json([]);
+    const issues = await Issue.find({
+      title: { $regex: q.trim(), $options: 'i' },
+    })
+      .select('title category status votes state')
+      .limit(3);
+    res.json(issues);
+  } catch (err) {
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// PATCH /api/issues/bulk — bulk status/priority update (admin)
+router.patch('/bulk', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { ids, update } = req.body;
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'No ids provided' });
+    const allowed = {};
+    if (update.status) allowed.status = update.status;
+    if (update.priority) allowed.priority = update.priority;
+    if (update.department) allowed.department = update.department;
+    const result = await Issue.updateMany({ _id: { $in: ids } }, { $set: allowed });
+    res.json({ updated: result.modifiedCount });
+  } catch (err) {
+    res.status(500).json({ error: 'Bulk update failed' });
+  }
+});
+
+// DELETE /api/issues/bulk — bulk delete (admin)
+router.delete('/bulk', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'No ids provided' });
+    const result = await Issue.deleteMany({ _id: { $in: ids } });
+    res.json({ deleted: result.deletedCount });
+  } catch (err) {
+    res.status(500).json({ error: 'Bulk delete failed' });
   }
 });
 
@@ -146,22 +216,37 @@ router.get('/:id', requireAuth, async (req, res) => {
 router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
   try {
     const { status, priority, department, adminNote } = req.body;
-    const update = {};
-    if (status !== undefined) update.status = status;
-    if (priority !== undefined) update.priority = priority;
-    if (department !== undefined) update.department = department;
-    if (adminNote !== undefined) update.adminNote = adminNote;
 
-    const issue = await Issue.findByIdAndUpdate(req.params.id, update, { new: true, runValidators: true });
-    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+    const existing = await Issue.findById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Issue not found' });
+
+    const statusChanged = status !== undefined && status !== existing.status;
+
+    const updateOp = { $set: {} };
+    if (status !== undefined) updateOp.$set.status = status;
+    if (priority !== undefined) updateOp.$set.priority = priority;
+    if (department !== undefined) updateOp.$set.department = department;
+    if (adminNote !== undefined) updateOp.$set.adminNote = adminNote;
+
+    if (statusChanged) {
+      updateOp.$push = { statusHistory: { status, note: adminNote || '', changedAt: new Date() } };
+    }
+
+    const issue = await Issue.findByIdAndUpdate(req.params.id, updateOp, { new: true, runValidators: true });
 
     io.to('admins').emit('issue_updated', issue);
 
-    if (status && status !== issue.status) {
+    if (statusChanged) {
+      const statusLabel = { pending: 'Pending', 'in-progress': 'In Progress', resolved: 'Resolved' }[status] || status;
+      io.to(`user_${existing.submittedBy}`).emit('citizen_notification', {
+        message: `Your issue "${existing.title}" is now ${statusLabel}`,
+        issueId: issue._id,
+        status,
+      });
       sendStatusUpdateEmail({
-        to: issue.submitterEmail,
-        name: issue.submitterName,
-        issueTitle: issue.title,
+        to: existing.submitterEmail,
+        name: existing.submitterName,
+        issueTitle: existing.title,
         status,
         adminNote,
       });
@@ -173,6 +258,48 @@ router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/issues/:id/vote — toggle upvote
+router.post('/:id/vote', requireAuth, async (req, res) => {
+  try {
+    const userId = req.auth.userId;
+    const issue = await Issue.findById(req.params.id);
+    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+
+    const hasVoted = issue.voters.includes(userId);
+    if (hasVoted) {
+      issue.voters = issue.voters.filter(v => v !== userId);
+      issue.votes = Math.max(0, issue.votes - 1);
+    } else {
+      issue.voters.push(userId);
+      issue.votes += 1;
+    }
+    await issue.save();
+    res.json({ votes: issue.votes, voted: !hasVoted });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to vote' });
+  }
+});
+
+// POST /api/issues/:id/rate — citizen satisfaction rating (issue owner, resolved only)
+router.post('/:id/rate', requireAuth, async (req, res) => {
+  try {
+    const { score, comment } = req.body;
+    if (!score || score < 1 || score > 5) return res.status(400).json({ error: 'Score must be 1–5' });
+
+    const issue = await Issue.findById(req.params.id);
+    if (!issue) return res.status(404).json({ error: 'Issue not found' });
+    if (issue.submittedBy !== req.auth.userId) return res.status(403).json({ error: 'Not your issue' });
+    if (issue.status !== 'resolved') return res.status(400).json({ error: 'Can only rate resolved issues' });
+    if (issue.rating?.score) return res.status(400).json({ error: 'Already rated' });
+
+    issue.rating = { score, comment: comment || '', ratedAt: new Date() };
+    await issue.save();
+    res.json(issue);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to submit rating' });
+  }
+});
+
 // DELETE /api/issues/:id (admin OR issue owner)
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
@@ -180,9 +307,10 @@ router.delete('/:id', requireAuth, async (req, res) => {
     if (!issue) return res.status(404).json({ error: 'Issue not found' });
 
     const userId = req.auth.userId;
+    const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
     const clerkUser = await clerkClient.users.getUser(userId);
     const email = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase();
-    const isAdmin = ADMIN_EMAILS.includes(email);
+    const isAdmin = adminEmails.includes(email);
     const isOwner = issue.submittedBy === userId;
 
     if (!isAdmin && !isOwner) return res.status(403).json({ error: 'Not allowed' });

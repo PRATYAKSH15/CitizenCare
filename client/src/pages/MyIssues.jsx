@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useAuth } from '@clerk/clerk-react'
 import api from '@/lib/api'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogHeader, DialogTitle, DialogContent, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, FileText, Brain, MapPin, Clock, Trash2 } from 'lucide-react'
+import { Loader2, FileText, Brain, MapPin, Clock, Trash2, ThumbsUp } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { StatusTimeline } from '@/components/StatusTimeline'
 
 const statusVariant = { pending: 'warning', 'in-progress': 'info', resolved: 'success' }
 const priorityVariant = { high: 'destructive', medium: 'warning', low: 'secondary' }
@@ -31,12 +32,41 @@ function IssueCard({ issue, onClick }) {
           <Badge variant={priorityVariant[issue.priority]} className="text-xs capitalize">{issue.priority}</Badge>
           <Badge variant={sentimentVariant[issue.sentiment]} className="text-xs capitalize">{issue.sentiment}</Badge>
         </div>
-        <div className="flex items-center gap-1 mt-3 text-xs text-muted-foreground">
-          <Clock className="h-3 w-3" />
-          {new Date(issue.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+        <div className="flex items-center justify-between mt-3">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Clock className="h-3 w-3" />
+            {new Date(issue.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+          </div>
+          {issue.votes > 0 && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <ThumbsUp className="h-3 w-3" /> {issue.votes}
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+function StarRating({ value, onChange, readonly = false }) {
+  const [hover, setHover] = useState(0)
+  return (
+    <div className="flex gap-1">
+      {[1, 2, 3, 4, 5].map(star => (
+        <button
+          key={star}
+          type="button"
+          onClick={() => !readonly && onChange?.(star)}
+          onMouseEnter={() => !readonly && setHover(star)}
+          onMouseLeave={() => !readonly && setHover(0)}
+          className={`text-2xl transition-colors leading-none ${
+            star <= (hover || value) ? 'text-yellow-400' : 'text-muted-foreground/30'
+          } ${readonly ? 'cursor-default' : 'cursor-pointer'}`}
+        >
+          ★
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -46,6 +76,28 @@ export default function MyIssues() {
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const [ratingScore, setRatingScore] = useState(0)
+  const [ratingComment, setRatingComment] = useState('')
+  const [submittingRating, setSubmittingRating] = useState(false)
+
+  const handleRate = async () => {
+    if (!ratingScore) return
+    setSubmittingRating(true)
+    try {
+      const token = await getToken()
+      const { data } = await api.post(`/issues/${selected._id}/rate`, { score: ratingScore, comment: ratingComment }, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      setIssues(prev => prev.map(i => i._id === data._id ? data : i))
+      setSelected(data)
+      setRatingScore(0)
+      setRatingComment('')
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSubmittingRating(false)
+    }
+  }
 
   const handleDelete = async (issue) => {
     if (!confirm('Delete this issue permanently?')) return
@@ -157,12 +209,51 @@ export default function MyIssues() {
                     <p className="text-sm border rounded-md p-2 bg-muted/20">{selected.adminNote}</p>
                   </div>
                 )}
+
+                {/* Status Timeline */}
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground uppercase mb-3">Status Timeline</p>
+                  <StatusTimeline issue={selected} />
+                </div>
+
+                {/* Satisfaction Rating */}
+                {selected.status === 'resolved' && (
+                  <div className="rounded-lg border p-3">
+                    <p className="text-xs font-medium text-muted-foreground uppercase mb-2">Your Rating</p>
+                    {selected.rating?.score ? (
+                      <div>
+                        <StarRating value={selected.rating.score} readonly />
+                        {selected.rating.comment && (
+                          <p className="text-xs text-muted-foreground mt-1 italic">"{selected.rating.comment}"</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">How satisfied are you with the resolution?</p>
+                        <StarRating value={ratingScore} onChange={setRatingScore} />
+                        <textarea
+                          value={ratingComment}
+                          onChange={e => setRatingComment(e.target.value)}
+                          placeholder="Optional feedback…"
+                          className="w-full text-xs rounded-md border border-input bg-transparent px-2.5 py-1.5 placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none min-h-[56px]"
+                        />
+                        <Button size="sm" onClick={handleRate} disabled={!ratingScore || submittingRating} className="w-full">
+                          {submittingRating ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+                          Submit Rating
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {selected.imageBase64 && (
                   <img src={selected.imageBase64} alt="Issue" className="rounded-lg border max-h-48 object-cover w-full" />
                 )}
-                <p className="text-xs text-muted-foreground">
-                  Submitted {new Date(selected.createdAt).toLocaleString('en-IN')}
-                </p>
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Submitted {new Date(selected.createdAt).toLocaleString('en-IN')}</span>
+                  <span className="flex items-center gap-1">
+                    <ThumbsUp className="h-3 w-3" /> {selected.votes || 0} upvote{selected.votes !== 1 ? 's' : ''}
+                  </span>
+                </div>
               </div>
             </DialogContent>
             <DialogFooter>

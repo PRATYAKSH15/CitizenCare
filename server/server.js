@@ -29,6 +29,9 @@ export const io = new Server(httpServer, {
 
 io.on('connection', (socket) => {
   socket.join('admins');
+  socket.on('join_user', (userId) => {
+    if (userId) socket.join(`user_${userId}`);
+  });
 });
 
 connectDB();

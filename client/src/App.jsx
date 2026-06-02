@@ -7,6 +7,10 @@ import CitizenPortal from './pages/CitizenPortal'
 import AdminDashboard from './pages/AdminDashboard'
 import MyIssues from './pages/MyIssues'
 import Analytics from './pages/Analytics'
+import IssueMap from './pages/IssueMap'
+import Feed from './pages/Feed'
+import Profile from './pages/Profile'
+import { SocketNotifications } from './components/SocketNotifications'
 
 function ProtectedRoute({ children }) {
   const { isSignedIn, isLoaded } = useAuth()
@@ -31,6 +35,7 @@ function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-background">
+        <SocketNotifications />
         <Navbar />
         <Routes>
           <Route path="/" element={<LandingPage />} />
@@ -40,6 +45,9 @@ function App() {
           <Route path="/my-issues" element={<ProtectedRoute><MyIssues /></ProtectedRoute>} />
           <Route path="/dashboard" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
           <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
+          <Route path="/map" element={<IssueMap />} />
+          <Route path="/feed" element={<Feed />} />
+          <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
         </Routes>
       </div>
     </BrowserRouter>
